@@ -1,0 +1,68 @@
+"""dcgan eval"""
+import argparse
+import numpy as np
+from mindspore import context, Tensor, nn, load_checkpoint
+
+from src.config import dcgan_imagenet_cfg as cfg
+from src.generator import Generator
+from src.discriminator import Discriminator
+from src.cell import WithLossCellD, WithLossCellG
+from src.dcgan import DCGAN
+
+
+def save_imgs(gen_imgs, img_url):
+    """save_imgs function"""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    for i in range(gen_imgs.shape[0]):
+        plt.subplot(4, 4, i + 1)
+        gen_imgs[i] = gen_imgs[i] * 127.5 + 127.5
+        perm = (1, 2, 0)
+        show_imgs = np.transpose(gen_imgs[i], perm)
+        sdf = show_imgs.astype(int)
+        plt.imshow(sdf)
+        plt.axis("off")
+    plt.savefig(img_url + "/generate.png")
+
+
+def load_dcgan(ckpt_url):
+    """load_dcgan function"""
+    netD = Discriminator()
+    netG = Generator()
+
+    criterion = nn.BCELoss(reduction='mean')
+
+    netD_with_criterion = WithLossCellD(netD, netG, criterion)
+    netG_with_criterion = WithLossCellG(netD, netG, criterion)
+
+    optimizerD = nn.Adam(netD.trainable_params(), learning_rate=cfg.learning_rate, beta1=cfg.beta1)
+    optimizerG = nn.Adam(netG.trainable_params(), learning_rate=cfg.learning_rate, beta1=cfg.beta1)
+
+    myTrainOneStepCellForD = nn.TrainOneStepCell(netD_with_criterion, optimizerD)
+    myTrainOneStepCellForG = nn.TrainOneStepCell(netG_with_criterion, optimizerG)
+
+    dcgan = DCGAN(myTrainOneStepCellForD, myTrainOneStepCellForG)
+    load_checkpoint(ckpt_url, dcgan)
+    netG_trained = dcgan.myTrainOneStepCellForG.network.netG
+    return netG_trained
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='MindSpore dcgan training')
+    parser.add_argument('--device_target', type=str, default='Ascend', help='Ascend or GPU')
+    parser.add_argument('--device_id', type=int, default=0, help='device id of Ascend or GPU (Default: 0)')
+    parser.add_argument('--img_url', type=str, default=None, help='img save path')
+    parser.add_argument('--ckpt_url', type=str, default=None, help='checkpoint load path')
+    args = parser.parse_args()
+
+    context.set_context(mode=context.GRAPH_MODE, device_target=args.device_target)
+    context.set_context(device_id=args.device_id)
+
+    fixed_noise = Tensor(np.random.normal(size=(16, cfg.latent_size, 1, 1)).astype("float32"))
+
+    net_G = load_dcgan(args.ckpt_url)
+    fake = net_G(fixed_noise)
+    print("================saving images================")
+    save_imgs(fake.asnumpy(), args.img_url)
+    print("================success================")
